@@ -5,8 +5,8 @@ get_prior <- function(w) {
   wcov <- var(w) 
   list(a0 = 10, 
        b0 = 1, 
-       nu1 = 4, 
-       nu2 = 4, 
+       nu1 = 10, 
+       nu2 = 10, 
        s2 = 0.5 * wcov, 
        m2 = wbar, 
        psiinv2 = 2 * solve(wcov),
@@ -20,3 +20,9 @@ sample_from_density <- function(n, x, y) {
   
 }
 
+all_sets_formula <- function(vars) {
+  
+  unlist(sapply(1:length(vars), function(i) {
+    combn(vars, i, FUN = function(x) paste(x, collapse = "|"), simplify = TRUE)
+  }))
+}
