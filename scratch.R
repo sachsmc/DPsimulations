@@ -6,7 +6,7 @@ sample_from_model <- function(y, x1, y.se, x1.se, xpred, ...) {
   w <- cbind(y, x1)
   
   
-  prior <- get_prior(w)
+  prior <- get_prior(w, ncol(x1))
     
   mcmc <- list(nburn=5000,
                nsave=1000,
@@ -43,7 +43,7 @@ predict_from_model <- function(y, x1, y.se, x1.se, xpred, ...) {
   w <- cbind(y, x1)
   
   
-  prior <- get_prior(w)
+  prior <- get_prior(w, ncol(x1))
   
   mcmc <- list(nburn=5000,
                nsave=1000,
@@ -87,7 +87,7 @@ leave_one_out <- function(trials, xvars) {
     
   }
   colnames(predictions) <- c("trial.leftout", colnames(predfit))
-  
+  predictions
   
 }
 

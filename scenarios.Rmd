@@ -1,0 +1,66 @@
+---
+title: "Scenarios"
+author: "Michael Sachs"
+date: "August 8, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+source("test-code.R")
+source("utils.R")
+source("scratch.R")
+```
+
+```{r, echo = FALSE, comment = NA}
+n <- 200
+
+for(scenarios in c("0", LETTERS[1:5])){
+
+cat("## Scenario", scenarios, ifelse(scenarios %in% c("D", "E"), " Multivariate", ""))
+  
+eff <- gen_effects(scenarios, n)
+indi.results <- do.call(rbind, lapply(1:n, function(i) analyze.indi.data(samp.indi.data(i, eff), i)))
+
+
+
+y <- subset(indi.results, var == "Y")$ests
+y.se <- subset(indi.results, var == "Y")$ses
+
+x1 <- as.matrix(reshape(subset(indi.results, var == "X1"), direction = "wide", drop = "ses", v.names = "ests", timevar = "var", idvar = "trial")[, -1])
+x1.se <- as.matrix(reshape(subset(indi.results, var == "X1"), direction = "wide", drop = "ests", v.names = "ses", timevar = "var", idvar = "trial")[, -1])
+
+xpred <- sort(x1)
+ses <- cbind(y.se, x1.se)
+w <- cbind(y, x1)
+
+
+prior <- get_prior(w, ncol(x1))
+
+mcmc <- list(nburn=5000,
+             nsave=1000,
+             nskip=2,
+             ndisplay=1e6)
+
+
+fitLDDP <- DPcdensity(y = y, x = x1, mus=w, sds=ses, xpred = xpred,
+                      ngrid=1, 
+                      compute.band=FALSE,
+                      type.band="HPD",
+                      prior=prior, 
+                      mcmc=mcmc, 
+                      state=NULL, 
+                      status=TRUE)
+
+
+plot(y~ x1, xlab = "x1", ylab = "y")
+lines(fitLDDP$meanfp.m ~ xpred)
+
+
+y <- subset(indi.results, var == "Y")$ests
+test2 <- leave_one_out(indi.results, xvars = paste0("X", 1))
+plot(y ~ test2$yhat, xlab = "leave 1 out predicted", ylab = "observed")
+abline(0, 1)
+
+}
+
+```

@@ -1,12 +1,12 @@
 
-get_prior <- function(w) {
+get_prior <- function(w, j) {
   
   wbar <- apply(w, 2, mean) 
   wcov <- var(w) 
   list(a0 = 10, 
        b0 = 1, 
-       nu1 = 10, 
-       nu2 = 10, 
+       nu1 = 3 + 1.5 * j, 
+       nu2 = 3 + 1.5 * j, 
        s2 = 0.5 * wcov, 
        m2 = wbar, 
        psiinv2 = 2 * solve(wcov),
