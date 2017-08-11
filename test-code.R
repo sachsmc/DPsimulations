@@ -1,6 +1,152 @@
 library(DPpackagemod)
 library(splines)
 
+
+get_prior <- function(w, j) {
+  
+  wbar <- apply(w, 2, mean) 
+  wcov <- var(w) 
+  list(a0 = 10, 
+       b0 = 1, 
+       nu1 = 3 + 1.5 * j, 
+       nu2 = 3 + 1.5 * j, 
+       s2 = 0.5 * wcov, 
+       m2 = wbar, 
+       psiinv2 = 2 * solve(wcov),
+       tau1 = 6.01, tau2 = 3.01)
+  
+}
+
+sample_from_density <- function(n, x, y) {
+  
+  sample(x, size = n, prob = y, replace = TRUE)
+  
+}
+
+all_sets_formula <- function(vars) {
+  
+  all.sets <- NULL
+  for(i in 1:length(vars)) {
+    
+    all.sets <-  c(all.sets, combn(vars, i, FUN = function(x) c(x), simplify = FALSE))
+    
+  }
+  all.sets
+  
+}
+
+
+
+sample_from_model <- function(y, x1, y.se, x1.se, xpred, ...) {
+  
+  ses <- cbind(y.se, x1.se)
+  w <- cbind(y, x1)
+  
+  
+  prior <- get_prior(w, ncol(x1))
+  
+  mcmc <- list(nburn=5000,
+               nsave=1000,
+               nskip=2,
+               ndisplay=1e6)
+  
+  mygrid <- seq(min(y) - 2 * sd(y), max(y) + 2 * sd(y), length.out = 500)
+  
+  fitLDDP <- DPcdensity(y = y, x = x1, mus=w, sds=ses, xpred = xpred,
+                        grid=mygrid, 
+                        compute.band=FALSE,
+                        type.band="HPD",
+                        prior=prior, 
+                        mcmc=mcmc, 
+                        state=NULL, 
+                        status=TRUE)
+  
+  
+  y.hat.samps <- lapply(1:length(y), function(i){
+    
+    data.frame(trial = i, t.hat.post = sample_from_density(100, fitLDDP$grid, fitLDDP$densp.m[i, ]))
+    
+  })
+  
+  do.call(rbind, y.hat.samps)
+  
+}
+
+
+
+predict_from_model <- function(y, x1, y.se, x1.se, xpred, ...) {
+  
+  ses <- cbind(y.se, x1.se)
+  w <- cbind(y, x1)
+  
+  
+  prior <- get_prior(w, ncol(x1))
+  
+  mcmc <- list(nburn=5000,
+               nsave=1000,
+               nskip=2,
+               ndisplay=1e6)
+  
+  
+  fitLDDP <- DPcdensity(y = y, x = x1, mus=w, sds=ses, xpred = xpred,
+                        ngrid=1, 
+                        compute.band=FALSE,
+                        type.band="HPD",
+                        prior=prior, 
+                        mcmc=mcmc, 
+                        state=NULL, 
+                        status=TRUE)
+  
+  
+  data.frame(xpred = xpred, yhat = fitLDDP$meanfp.m)
+  
+  
+}
+
+
+leave_one_out <- function(trials, xvars) {
+  
+  predictions <- as.data.frame(matrix(NA, ncol = 2 + length(xvars), nrow = length(unique(trials$trial))))
+  for(j in unique(trials$trial)) {
+    
+    y <- subset(trials, var == "Y" & trial != j)$ests
+    y.se <- subset(trials, var == "Y" & trial != j)$ses
+    
+    x <- subset(trials, var %in% xvars & trial != j)
+    x.est <- as.matrix(reshape(x, direction = "wide", drop = "ses", v.names = "ests", timevar = "var", idvar = "trial")[, -1])
+    x.ses <- as.matrix(reshape(x, direction = "wide", drop = "ests", v.names = "ses", timevar = "var", idvar = "trial")[, -1])
+    
+    xpred.x <- subset(trials, var %in% xvars & trial == j)
+    xpred <- as.matrix(reshape(xpred.x, direction = "wide", drop = "ses", v.names = "ests", timevar = "var", idvar = "trial")[, -1])
+    
+    predfit <- predict_from_model(y, x.est, y.se, x.ses, xpred)
+    predictions[j, ] <- cbind(trial.leftout = j, predfit)
+    
+  }
+  colnames(predictions) <- c("trial.leftout", colnames(predfit))
+  predictions
+  
+}
+
+
+pred_null <- function(trials) {
+  
+  prediction <- NULL
+  for(j in unique(trials$trial)) {
+    
+    y <- subset(trials, var == "Y" & trial != j)$ests
+    y.se <- subset(trials, var == "Y" & trial != j)$ses
+    y.bar <- mean(rnorm(length(y) * 1000, mean = rep(y, 1000), sd = rep(y.se, 1000)))
+    
+    prediction <- rbind(prediction, data.frame(trial = j, yhat.0 = y.bar))
+    
+  }
+  prediction
+  
+}
+
+
+
 gen_effects <- function(scenario, n = 20) {
   
   J <- 6
@@ -48,10 +194,9 @@ gen_effects <- function(scenario, n = 20) {
 
 
 
-samp.indi.data <- function(i, effects) {
+samp.indi.data <- function(i, effects, enns) {
   
-  enns <- sample(ceiling(runif(n, 100, 500)))
-  
+ 
   Y <- effects$Y
   X <- effects$X
   J <- ncol(X)
@@ -90,4 +235,80 @@ analyze.indi.data <- function(test, i) {
 
 
 
+run_one_rep <- function(scenario, n = 20, output, seed) {
+  
+  
+  set.seed(seed)
+  
+  enns <- sample(ceiling(runif(n, 100, 500)))
+  
+  eff <- gen_effects(scenario, n)
+  trials <- do.call(rbind, lapply(1:n, function(i) analyze.indi.data(samp.indi.data(i, eff, enns), i)))
+  
+  y <- subset(trials, var == "Y")$ests
+  y.se <- subset(trials, var == "Y")$ses
+  
+  x <- subset(trials, grepl("^X", var))
+  
+  xvars <- as.character(sort(unique(x$var)))
+  
+  x.est <- as.matrix(reshape(x, direction = "wide", drop = "ses", v.names = "ests", timevar = "var", idvar = "trial")[, -1])
+  x.ses <- as.matrix(reshape(x, direction = "wide", drop = "ests", v.names = "ses", timevar = "var", idvar = "trial")[, -1])
+  
+  Y.full.sample <- sample_from_model(y, x.est, y.se, x.ses, x.est)
+  
+  ## compute D0
+  
+  
+  pred.0 <- pred_null(trials)
+  varsets <- all_sets_formula(xvars)
+  
+  D.ests <- rep(NA, length(varsets))
+  D.true <- rep(NA, length(varsets))
+  P.D0 <- rep(NA, length(varsets))
+  
+  var.groups <- sapply(varsets, paste, collapse = "|")
+  
+  for(i in 1:length(varsets)) {
+    
+    pred.ins <- leave_one_out(trials, varsets[[i]])
+    compareto <- merge(pred.ins, Y.full.sample, by.x = "trial.leftout", by.y = "trial")
+    compareto <- merge(compareto, pred.0, by.x = "trial.leftout", by.y = "trial")
+    compareto$absdiff <- with(compareto, abs(t.hat.post - yhat))
+    compareto$absdiff.0 <- with(compareto, abs(t.hat.post - yhat.0))
+    
+    P.D0[i] <- mean(with(compareto, absdiff < absdiff.0))
+    D.ests[i] <- mean(compareto$absdiff)
+    D.true[i] <- mean(abs(y - pred.ins$yhat))
+    
+  }
+  
+  
+  btr.than.0 <- P.D0 < 0.5
+  if(!any(btr.than.0)) {
+    
+    outdat <- data.frame(Scenario = scenario, 
+                      D.est = mean(compareto$absdiff.0), 
+                      D.true = mean(abs(y - pred.0$yhat.0)), 
+                      model.sel = "Null")
+    
+  } else {
+    
+    kp <- D.ests[btr.than.0]
+    kp.true <- D.true[btr.than.0]
+    
+    mydex <- which.min(kp)
+    
+    outdat <- data.frame(Scenario = scenario, 
+                      D.est = kp[mydex], 
+                      D.true = kp.true[mydex], 
+                      model.sel = var.groups[btr.than.0][mydex])
+    
+  }
+  
+  
+  write.csv(outdat, file = output, row.names = FALSE, col.names = FALSE)
+  
+  
+}
 

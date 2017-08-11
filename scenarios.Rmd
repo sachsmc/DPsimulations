@@ -21,8 +21,6 @@ cat("## Scenario", scenarios, ifelse(scenarios %in% c("D", "E"), " Multivariate"
 eff <- gen_effects(scenarios, n)
 indi.results <- do.call(rbind, lapply(1:n, function(i) analyze.indi.data(samp.indi.data(i, eff), i)))
 
-
-
 y <- subset(indi.results, var == "Y")$ests
 y.se <- subset(indi.results, var == "Y")$ses
 
