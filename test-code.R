@@ -163,13 +163,13 @@ gen_effects <- function(scenario, n = 20) {
     
   } else if(scenario == "B") {
     
-    X.star <- cbind(bs(X[, 1], knots = c(0), degree = 1), X[, -1])
-    beta <- c(-1.75, .1, 0, 0, 0, 0, 0)
+    X.star <- cbind(bs(X[, 1], knots = c(-.5), degree = 1), X[, -1])
+    beta <- c(-1.75, .5, 0, 0, 0, 0, 0)
     Y <-  1 - X.star %*% beta + err
     
   } else if(scenario == "C") {
     
-    Y <- 3.5 - (X[, 1] - 1) * (X[, 1] - .5) + err
+    Y <- 3.5 - (.45 * X[, 1] - 1) * (.35 * X[, 1] - .5) + err
     
   } else if(scenario == "D") {  ## multivariate
     
@@ -182,9 +182,9 @@ gen_effects <- function(scenario, n = 20) {
                     bs(X[, 2], knots = c(-.5, .25)),
                     bs(X[, 3], knots = c(-.25, .5)),
                     X[, 4:6])
-    beta <- c(rep(c(.5, .25, .5, -.2, .75), 3), 0, 0, 0)
+    beta <- c(rep(c(1.5, 1.25, .5, -.2, 1.25), 3), 0, 0, 0)
     
-    Y <- .75 + X.star %*% beta + err
+    Y <- -1 + X.star %*% beta + err
       
   } else stop("No scenario")
   
@@ -284,7 +284,7 @@ run_one_rep <- function(scenario, n = 20, output, seed) {
   }
   
   
-  btr.than.0 <- P.D0 < 0.5
+  btr.than.0 <- P.D0 >= 0.5
   if(!any(btr.than.0)) {
     
     outdat <- data.frame(Scenario = scenario, 
@@ -307,7 +307,7 @@ run_one_rep <- function(scenario, n = 20, output, seed) {
   }
   
   
-  write.csv(outdat, file = output, row.names = FALSE, col.names = FALSE)
+  write.table(outdat, file = output, sep = ",", row.names = FALSE, col.names = FALSE, append = TRUE)
   
   
 }

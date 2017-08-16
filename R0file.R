@@ -1,0 +1,7 @@
+source("test-code.R")
+run_one_rep("0", 20, output = "DUMY1", seed = DUMZ)
+run_one_rep("A", 20, output = "DUMY1", seed = DUMZ)
+run_one_rep("B", 20, output = "DUMY1", seed = DUMZ)
+run_one_rep("C", 20, output = "DUMY1", seed = DUMZ)
+run_one_rep("D", 20, output = "DUMY1", seed = DUMZ)
+run_one_rep("E", 20, output = "DUMY1", seed = DUMZ)
