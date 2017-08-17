@@ -74,7 +74,7 @@ sample_from_model <- function(y, x1, y.se, x1.se, xpred, ...) {
 
 
 
-predict_from_model <- function(y, x1, y.se, x1.se, xpred, ...) {
+predict_from_model <- function(y, x1, y.se, x1.se, xpred, band = FALSE, ...) {
   
   ses <- cbind(y.se, x1.se)
   w <- cbind(y, x1)
@@ -90,16 +90,18 @@ predict_from_model <- function(y, x1, y.se, x1.se, xpred, ...) {
   
   fitLDDP <- DPcdensity(y = y, x = x1, mus=w, sds=ses, xpred = xpred,
                         ngrid=1, 
-                        compute.band=FALSE,
+                        compute.band=band,
                         type.band="HPD",
                         prior=prior, 
                         mcmc=mcmc, 
                         state=NULL, 
                         status=TRUE)
   
-  
-  data.frame(xpred = xpred, yhat = fitLDDP$meanfp.m)
-  
+  if(band) {
+    data.frame(xpred = xpred, yhat = fitLDDP$meanfp.m, yhat.lower = fitLDDP$meanfp.l, yhat.upper = fitLDDP$meanfp.h)
+  } else {
+    data.frame(xpred = xpred, yhat = fitLDDP$meanfp.m)
+  }
   
 }
 
@@ -147,7 +149,7 @@ pred_null <- function(trials) {
 
 
 
-gen_effects <- function(scenario, n = 20) {
+gen_effects <- function(scenario, n = 21) {
   
   J <- 6
   X <- matrix(rnorm(n * J, sd = 1), nrow = n, ncol = J)
@@ -235,7 +237,7 @@ analyze.indi.data <- function(test, i) {
 
 
 
-run_one_rep <- function(scenario, n = 20, output, seed) {
+run_one_rep <- function(scenario, n = 21, output, seed) {
   
   
   set.seed(seed)
@@ -244,6 +246,9 @@ run_one_rep <- function(scenario, n = 20, output, seed) {
   
   eff <- gen_effects(scenario, n)
   trials <- do.call(rbind, lapply(1:n, function(i) analyze.indi.data(samp.indi.data(i, eff, enns), i)))
+  
+  leftout <- subset(trials, trial == n)
+  trials <- subset(trials, trial != n)
   
   y <- subset(trials, var == "Y")$ests
   y.se <- subset(trials, var == "Y")$ses
@@ -287,10 +292,15 @@ run_one_rep <- function(scenario, n = 20, output, seed) {
   btr.than.0 <- P.D0 >= 0.5
   if(!any(btr.than.0)) {
     
+    pred0.ci <- t.test(y)$conf.int
+    
     outdat <- data.frame(Scenario = scenario, 
                       D.est = mean(compareto$absdiff.0), 
                       D.true = mean(abs(y - pred.0$yhat.0)), 
-                      model.sel = "Null")
+                      model.sel = "Null", 
+                      y.j1 = subset(leftout, var == "Y")$ests, 
+                      yhat.j1 = mean(y), 
+                      yhat.j1.lower = pred0.ci[1], yhat.j1.upper = pred0.ci[2])
     
   } else {
     
@@ -299,10 +309,21 @@ run_one_rep <- function(scenario, n = 20, output, seed) {
     
     mydex <- which.min(kp)
     
+    xkeep <- as.numeric(gsub("X", "", varsets[[mydex]]))
+    x.est <- as.matrix(reshape(x, direction = "wide", drop = "ses", v.names = "ests", timevar = "var", idvar = "trial")[, -1])[, xkeep, drop = FALSE]
+    x.ses <- as.matrix(reshape(x, direction = "wide", drop = "ests", v.names = "ses", timevar = "var", idvar = "trial")[, -1])[, xkeep, drop = FALSE]
+    
+    xpred.x <- subset(leftout, var %in% varsets[[mydex]])
+    xpred <- as.matrix(reshape(xpred.x, direction = "wide", drop = "ses", v.names = "ests", timevar = "var", idvar = "trial")[, -1])
+    
+    predfit <- predict_from_model(y, x.est, y.se, x.ses, xpred, band = TRUE)
+    
     outdat <- data.frame(Scenario = scenario, 
                       D.est = kp[mydex], 
                       D.true = kp.true[mydex], 
-                      model.sel = var.groups[btr.than.0][mydex])
+                      model.sel = var.groups[btr.than.0][mydex], 
+                      y.j1 = subset(leftout, var == "Y")$ests, yhat.j1 = predfit$yhat, 
+                      yhat.j1.lower = predfit$yhat.lower, yhat.j1.upper = predfit$yhat.upper) 
     
   }
   
