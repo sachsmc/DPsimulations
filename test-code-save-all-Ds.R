@@ -76,6 +76,62 @@ sample_from_model <- function(y, x1, y.se, x1.se, xpred, ...) {
 
 
 
+sample_from_marginal <- function(y, x1, y.se, x1.se, ...) {
+  
+  ses <- cbind(y.se, x1.se)
+  w <- cbind(y, x1)
+  xpred <- x1
+  
+  prior <- get_prior(w, ncol(x1))
+  
+  mcmc <- list(nburn=1000,
+               nsave=1000,
+               nskip=2,
+               ndisplay=1e6)
+  
+  mcmc.lite <- list(nburn=100,
+               nsave=10,
+               nskip=2,
+               ndisplay=1e6)
+  
+  mygrid <- seq(min(y) - 2 * sd(y), max(y) + 2 * sd(y), length.out = 1)
+  
+  sink(tempfile())
+  fit.init <- DPcdensity(y = c(y,y), x = rbind(x1, x1), mus=rbind(w, w), sds=rbind(ses, ses), xpred = xpred,
+                        grid=mygrid, 
+                        compute.band=FALSE,
+                        type.band="HPD",
+                        prior=prior, 
+                        mcmc=mcmc, 
+                        state=NULL, 
+                        status=TRUE, 
+                        work.dir = tempdir())
+  
+  
+  y.hat.samps <- lapply(1:100, function(i){
+    
+    fit.inside <- DPcdensity(y = c(y, rep(NA, length(y))), x = rbind(x1, x1), mus=rbind(w, w), sds=rbind(ses, ses), xpred = xpred,
+               grid=mygrid, 
+               compute.band=FALSE,
+               type.band="HPD",
+               prior=prior, 
+               mcmc=mcmc.lite, 
+               state=fit.init$state, 
+               status=FALSE, 
+               work.dir = tempdir())
+    
+    data.frame(trial = 1:length(y), y.marginal = fit.inside$state$z[-c(1:length(y)), 1])
+    
+  })
+  
+  sink(NULL)
+  
+  do.call(rbind, y.hat.samps)
+  
+}
+
+
+
 predict_from_model <- function(y, x1, y.se, x1.se, xpred, band = FALSE, ...) {
   
   ses <- cbind(y.se, x1.se)
@@ -264,7 +320,15 @@ run_one_rep <- function(scenario, n = 21, output, seed) {
   x.est <- as.matrix(reshape(x, direction = "wide", drop = "ses", v.names = "ests", timevar = "var", idvar = "trial")[, -1])
   x.ses <- as.matrix(reshape(x, direction = "wide", drop = "ests", v.names = "ses", timevar = "var", idvar = "trial")[, -1])
   
-  Y.full.sample <- sample_from_model(y, x.est, y.se, x.ses, x.est)
+  # Y.full.sample <- sample_from_model(y, x.est, y.se, x.ses, x.est)
+  
+  # Y.full.sample2 <- do.call(rbind, lapply(1:(n-1), function(i){ 
+  #   data.frame(trial = i, t.hat.post = rnorm(100, mean = y[i], sd = y.se[i])) 
+  #   }))  
+  system.time(
+  Y.full.sample <- sample_from_marginal(y, x.est, y.se, x.ses)
+  )
+  ## replace this with a jags model for the marginal
   
   ## compute D0
   
@@ -284,81 +348,19 @@ run_one_rep <- function(scenario, n = 21, output, seed) {
     pred.ins <- leave_one_out(trials, varsets[[i]])
     compareto <- merge(pred.ins, Y.full.sample, by.x = "trial.leftout", by.y = "trial")
     compareto <- merge(compareto, pred.0, by.x = "trial.leftout", by.y = "trial")
-    compareto$absdiff <- with(compareto, abs(t.hat.post - yhat))
-    compareto$absdiff.0 <- with(compareto, abs(t.hat.post - yhat.0))
+    compareto <- merge(compareto, data.frame(trial.leftout = 1:(n - 1), y = eff$Y[1:(n-1)]), by = "trial.leftout")
+    compareto$absdiff <- with(compareto, abs(y.marginal - yhat))
+    compareto$absdiff.0 <- with(compareto, abs(y.marginal - yhat.0))
+    compareto$absdiff.true <- with(compareto, abs(y - yhat))
     
-    P.D0[i] <- mean(with(compareto, absdiff.0 < absdiff))
-    D.ests[i] <- mean(compareto$absdiff)
-    D.true[i] <- mean(abs(y - pred.ins$yhat))
-    compare.sets[[i]] <- compareto[, c("trial.leftout", "yhat", "t.hat.post")]
+    compareto$varset <- var.groups[i]
+    compareto$scenario <- scenario
+    compareto$replicate.seed <- seed
+    compare.sets[[i]] <- compareto[, -grep("^xpred", colnames(compareto))]
   
   }
   
-  
-  btr.than.0 <- P.D0 < 0.4
-  if(!any(btr.than.0)) {
-    
-    pred0.ci <- t.test(y)$conf.int
-    
-    outdat <- data.frame(Scenario = scenario, 
-                      D.est = mean(compareto$absdiff.0), 
-                      D.true = mean(abs(y - pred.0$yhat.0)), 
-                      model.sel = "Null", 
-                      y.j1 = subset(leftout, var == "Y")$ests, 
-                      yhat.j1 = mean(y), 
-                      yhat.j1.lower = pred0.ci[1], yhat.j1.upper = pred0.ci[2])
-    
-  } else {
-    
-    
-    kp <- D.ests[btr.than.0]
-    kp.true <- D.true[btr.than.0]
-    compare.sets <- compare.sets[btr.than.0]
-    
-    cand.vars <- varsets[btr.than.0]
-    
-    mydex <- which.min(kp)
-    
-    ## compare all sets to mydex
-    
-    P.Dkp <- rep(NA, length(kp))
-    for(j in (1:length(kp))) {
-      
-      if(j == mydex){
-        P.Dkp[j] <- 1
-        next
-      }
-    
-      tmp.compare <- merge(compare.sets[[mydex]], compare.sets[[j]], by = c("trial.leftout", "t.hat.post"))
-      tmp.compare <- within(tmp.compare, {
-        absdiff.x <- abs(t.hat.post - yhat.x)
-        absdiff.y <- abs(t.hat.post - yhat.y)
-      })
-      P.Dkp[j] <- mean(with(tmp.compare, absdiff.y < absdiff.x))
-      
-    }
-    
-    ## keep the smallest subset not significantly different
-    
-    mydex <- which.min(sapply(cand.vars[P.Dkp > .5], length))
-    
-    xkeep <- as.numeric(gsub("X", "", varsets[[mydex]]))
-    x.est <- as.matrix(reshape(x, direction = "wide", drop = "ses", v.names = "ests", timevar = "var", idvar = "trial")[, -1])[, xkeep, drop = FALSE]
-    x.ses <- as.matrix(reshape(x, direction = "wide", drop = "ests", v.names = "ses", timevar = "var", idvar = "trial")[, -1])[, xkeep, drop = FALSE]
-    
-    xpred.x <- subset(leftout, var %in% varsets[[mydex]])
-    xpred <- as.matrix(reshape(xpred.x, direction = "wide", drop = "ses", v.names = "ests", timevar = "var", idvar = "trial")[, -1])
-    
-    predfit <- predict_from_model(y, x.est, y.se, x.ses, xpred, band = TRUE)
-    
-    outdat <- data.frame(Scenario = scenario, 
-                      D.est = kp[mydex], 
-                      D.true = kp.true[mydex], 
-                      model.sel = var.groups[btr.than.0][mydex], 
-                      y.j1 = subset(leftout, var == "Y")$ests, yhat.j1 = predfit$yhat, 
-                      yhat.j1.lower = predfit$yhat.lower, yhat.j1.upper = predfit$yhat.upper) 
-    
-  }
+  outdat <- do.call(rbind, compare.sets)
   
   
   write.table(outdat, file = output, sep = ",", row.names = FALSE, col.names = FALSE, append = TRUE)
