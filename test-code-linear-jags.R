@@ -1,4 +1,4 @@
-library(DPpackagemod)
+library(rjags)
 library(splines)
 
 
@@ -16,6 +16,35 @@ get_prior <- function(w, j) {
        tau1 = 6.01, tau2 = 3.01)
   
 }
+
+
+
+cat("
+    model {
+    ## Priors
+    alpha ~ dnorm(0, .001)
+    
+    for(j in 1:k){
+    beta[j] ~ dnorm(0, .001)
+    }
+    
+    ## Likelihood
+    for (i in 1:n){
+    
+    tauy[i] <- 1 / (sdy[i] * sdy[i])
+    for(j in 1:k){
+    taux[i,j] <- 1 / (sdx[i,j] * sdx[i,j])
+    truex[i,j] ~ dnorm(0, 0.01)
+    x[i,j] ~ dnorm(truex[i,j], taux[i,j])
+    
+    }
+    truey[i] ~ dnorm(mu[i], 1)
+    y[i] ~ dnorm(truey[i], tauy[i])
+    mu[i] <- alpha + beta %*% truex[i,]
+    }
+    }
+    ", fill=T, file="xyerror.txt")
+
 
 sample_from_density <- function(n, x, y) {
   
@@ -45,7 +74,7 @@ sample_from_model <- function(y, x1, y.se, x1.se, xpred, ...) {
   
   prior <- get_prior(w, ncol(x1))
   
-  mcmc <- list(nburn=5000,
+  mcmc <- list(nburn=2000,
                nsave=1000,
                nskip=2,
                ndisplay=1e6)
@@ -78,57 +107,23 @@ sample_from_model <- function(y, x1, y.se, x1.se, xpred, ...) {
 
 sample_from_marginal <- function(y, x1, y.se, x1.se, ...) {
   
-  ses <- cbind(y.se, x1.se)
-  w <- cbind(y, x1)
-  xpred <- x1
+   # bundle data
+  jags_d <- list(x = x1, y = y, 
+                 sdx = x1.se, sdy = y.se, n = length(y), k = ncol(x1))
   
-  prior <- get_prior(w, ncol(x1))
+  # initiate model
+  mod2 <- jags.model("xyerror.txt", data=jags_d,
+                     n.chains=1, n.adapt=1000, quiet = TRUE)
   
-  mcmc <- list(nburn=5000,
-               nsave=100,
-               nskip=2,
-               ndisplay=1e6)
+  # simulate posterior
+  out <- coda.samples(mod2, n.iter=10000, thin=10,
+                      variable.names=c("truey"), quiet = TRUE)[[1]]
   
-  mcmc.lite <- list(nburn=100,
-               nsave=10,
-               nskip=2,
-               ndisplay=1e6)
+  colnames(out) <- paste("trial", 1:ncol(out), sep = ".")
+  out <- as.data.frame(out)
   
-  mygrid <- seq(min(y) - 2 * sd(y), max(y) + 2 * sd(y), length.out = 1)
-  
-  sink(tempfile())
-  fit.init <- DPcdensity(y = c(y,y), x = rbind(x1, x1), mus=rbind(w, w), sds=rbind(ses, ses), xpred = xpred,
-                        grid=mygrid, 
-                        compute.band=FALSE,
-                        type.band="HPD",
-                        prior=prior, 
-                        mcmc=mcmc, 
-                        state=NULL, 
-                        status=TRUE, 
-                        work.dir = tempdir())
-  
-  
-  y.hat.samps <- NULL
-  
-  fit.inside <- fit.init
-  for(i in 1:1000)  {
-    
-    fit.inside <- DPcdensity(y = c(y, rep(NA, length(y))), x = rbind(x1, x1), mus=rbind(w, w), sds=rbind(ses, ses), xpred = xpred,
-               grid=mygrid, 
-               compute.band=FALSE,
-               type.band="HPD",
-               prior=prior, 
-               mcmc=mcmc.lite, 
-               state=fit.inside$state, 
-               status=FALSE, 
-               work.dir = tempdir())
-    
-    y.hat.samps <- rbind(y.hat.samps, 
-                         data.frame(trial = 1:length(y), y.marginal = fit.inside$state$z[-c(1:length(y)), 1]))
-    
-  }
-  
-  sink(NULL)
+  y.hat.samps <- reshape(out, varying = colnames(out), direction = "long")[, -3]
+  colnames(y.hat.samps) <- c("trial", "y.marginal")
   
   y.hat.samps
   
@@ -136,35 +131,26 @@ sample_from_marginal <- function(y, x1, y.se, x1.se, ...) {
 
 
 
-predict_from_model <- function(y, x1, y.se, x1.se, xpred, band = FALSE, ...) {
+predict_from_model <- function(y, x1, y.se, x1.se, xpred, xpred.se, band = FALSE, ...) {
   
-  ses <- cbind(y.se, x1.se)
-  w <- cbind(y, x1)
+  # bundle data
+  jags_d <- list(x = rbind(x1, xpred), y = c(y, NA), 
+                 sdx = rbind(x1.se, xpred.se), sdy = c(y.se, mean(y.se)), n = length(y) + 1, k = ncol(x1))
   
+  # initiate model
+  mod2 <- jags.model("xyerror.txt", data=jags_d,
+                     n.chains=1, n.adapt=1000, quiet = TRUE)
   
-  prior <- get_prior(w, ncol(x1))
+  # simulate posterior
+  out <- coda.samples(mod2, n.iter=10000, thin=10,
+                      variable.names=c("alpha", "beta", "truey"), quiet = TRUE)
   
-  mcmc <- list(nburn=5000,
-               nsave=1000,
-               nskip=2,
-               ndisplay=1e6)
-  
-  sink(tempfile())
-  fitLDDP <- DPcdensity(y = y, x = x1, mus=w, sds=ses, xpred = xpred,
-                        ngrid=1, 
-                        compute.band=band,
-                        type.band="HPD",
-                        prior=prior, 
-                        mcmc=mcmc, 
-                        state=NULL, 
-                        status=TRUE, 
-                        work.dir = tempdir())
-  sink(NULL)
+  yhat.dist <- out[[1]][, ncol(out[[1]])]
   
   if(band) {
-    data.frame(xpred = xpred, yhat = fitLDDP$meanfp.m, yhat.lower = fitLDDP$meanfp.l, yhat.upper = fitLDDP$meanfp.h)
+    data.frame(xpred = xpred, yhat = median(yhat.dist), yhat.lower = quantile(yhat.dist, .025), yhat.upper = quantile(yhat.dist, 0.975))
   } else {
-    data.frame(xpred = xpred, yhat = fitLDDP$meanfp.m)
+    data.frame(xpred = xpred, yhat = median(yhat.dist))
   }
   
 }
@@ -184,8 +170,9 @@ leave_one_out <- function(trials, xvars) {
     
     xpred.x <- subset(trials, var %in% xvars & trial == j)
     xpred <- as.matrix(reshape(xpred.x, direction = "wide", drop = "ses", v.names = "ests", timevar = "var", idvar = "trial")[, -1])
+    xpred.se <- as.matrix(reshape(xpred.x, direction = "wide", drop = "ests", v.names = "ses", timevar = "var", idvar = "trial")[, -1])
     
-    predfit <- predict_from_model(y, x.est, y.se, x.ses, xpred, band = TRUE)
+    predfit <- predict_from_model(y, x.est, y.se, x.ses, xpred, xpred.se, band = TRUE)
     predictions[j, ] <- cbind(trial.leftout = j, predfit)
     
   }
@@ -217,7 +204,7 @@ gen_effects <- function(scenario, n = 21) {
   
   J <- 6
   X <- matrix(rnorm(n * J, sd = 1), nrow = n, ncol = J)
-  err <- rep(0, n) ## error comes from the individual data + estimation
+  err <- rep(0, n) #025 * rt(nrow(X), df = 15)
   
   if(scenario == "0") {
     
@@ -252,11 +239,11 @@ gen_effects <- function(scenario, n = 21) {
     
     Y <- -1 + X.star %*% beta + err
       
-  } else if(scenario == "F") {
+  }else if(scenario == "F") {
     
     Y <- 1.5 + .5 * X[, 1] + .5 * X[, 2] + X[, 1] * X[, 2] + err
     
-    } else stop("No scenario")
+  } else stop("No scenario")
   
   list(Y = Y, X = X)
   
@@ -314,6 +301,18 @@ run_one_rep <- function(scenario, n = 21, output, seed) {
   
   eff <- gen_effects(scenario, n)
   trials <- do.call(rbind, lapply(1:n, function(i) analyze.indi.data(samp.indi.data(i, eff, enns), i)))
+  ## add pairwise interactions
+  
+  xes.tmp <- subset(trials, grepl("X", var))
+  xes.tmp2 <- subset(merge(xes.tmp, xes.tmp, by = "trial"), var.x != var.y)
+  xes.tmp2$ests <- with(xes.tmp2, ests.x * ests.y)
+  xes.tmp2$ses <- with(xes.tmp2, sqrt(ests.x^2 * ses.y^2 + 
+                                        ests.y^2 * ses.x^2 + 
+                                        ses.x^2 * ses.y^2))
+  xes.tmp2$var <- with(xes.tmp2, paste(var.x, var.y, sep = ":"))
+  
+  xes.tmp3 <- xes.tmp2[, c("trial", "ests", "ses", "var")]
+  trials <- rbind(trials, xes.tmp3)  
   
   leftout <- subset(trials, trial == n)
   #trials <- subset(trials, trial != n)
@@ -324,6 +323,7 @@ run_one_rep <- function(scenario, n = 21, output, seed) {
   x <- subset(trials, grepl("^X", var))
   
   xvars <- as.character(sort(unique(x$var)))
+  xvars <- xvars[!grepl(":", xvars)]
   
   x.est <- as.matrix(reshape(x, direction = "wide", drop = "ses", v.names = "ests", timevar = "var", idvar = "trial")[, -1])
   x.ses <- as.matrix(reshape(x, direction = "wide", drop = "ests", v.names = "ses", timevar = "var", idvar = "trial")[, -1])
@@ -332,11 +332,24 @@ run_one_rep <- function(scenario, n = 21, output, seed) {
   Y.full.sample <- sample_from_marginal(y, x.est, y.se, x.ses)
   Y.full.sample$seed <- seed
   Y.full.sample$scenario <- scenario
+  
   ## compute D0
+  
+  
   pred.0 <- pred_null(trials)
   varsets <- all_sets_formula(xvars)
   
+  ## all pairwise interactions
   
+  wh2 <- lapply(varsets, function(x){ 
+    if(length(x) == 2) {
+      
+      return(c(x, paste(x, collapse = ":")))
+    } else NULL
+  
+  })
+  wh2 <- wh2[sapply(wh2, function(x) !is.null(x))]
+  varsets <- c(varsets, wh2)
   
   D.ests <- rep(NA, length(varsets))
   D.true <- rep(NA, length(varsets))
