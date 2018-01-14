@@ -135,6 +135,92 @@ sample_from_marginal <- function(y, x1, y.se, x1.se, ...) {
 }
 
 
+sample_from_marginal_mh <- function(y, x1, y.se, x1.se, M = 100, ...) {
+  
+  ses <- cbind(y.se, x1.se)
+  w <- cbind(y, x1)
+  xpred <- x1
+  
+  prior <- get_prior(w, ncol(x1))
+  
+  mcmc <- list(nburn=5000,
+               nsave=100,
+               nskip=2,
+               ndisplay=1e6)
+  
+  mcmc.lite <- list(nburn=0,
+                    nsave=1,
+                    nskip=0,
+                    ndisplay=1e6)
+  
+  mygrid <- seq(min(y) - 2 * sd(y), max(y) + 2 * sd(y), length.out = 1)
+  
+  
+  
+  sink(tempfile())
+  fit.init <- DPcdensity(y = c(y,y), x = rbind(x1, x1), mus=rbind(w, w), sds=rbind(ses, ses), xpred = xpred,
+                         grid=mygrid, 
+                         compute.band=FALSE,
+                         type.band="HPD",
+                         prior=prior, 
+                         mcmc=mcmc, 
+                         state=NULL, 
+                         status=TRUE, 
+                         work.dir = tempdir())
+  
+  
+  kernel_val <- function(dd) {
+    
+    exp(- rowSums((dd - w) ^ 2 / (2 * ses ^ 2)))
+    
+  }
+  
+  y.hat.samps <- NULL
+  x.na <- x1
+  x.na[ , ] <- NA
+  
+  rep.mat <- function(len, what) {
+    
+    do.call(rbind, lapply(1:len, function(i) what))
+    
+  }
+  
+  for(i in 1:5000)  {
+    
+    d.M <- vector("list", length = M)
+    cur.D <- w
+    accept.track <- NULL
+  
+    for(j in 1:M) {
+      fit.inside <- DPcdensity(y = c(y, rep(NA, length(y))), x = rbind(x1, x.na), mus=rbind(w, w), sds=rbind(ses, ses), xpred = xpred,
+                               grid=mygrid, 
+                               compute.band=FALSE,
+                               type.band="HPD",
+                               prior=prior, 
+                               mcmc=mcmc.lite, 
+                               state=fit.init$state, 
+                               status=FALSE, 
+                               work.dir = tempdir())
+      d.M[[j]] <- fit.inside$state$z[-c(1:length(y)), ]
+      
+      alpha <- pmin(1, kernel_val(d.M[[j]]) / kernel_val(cur.D))
+      
+      accept <- as.logical(rbinom(length(alpha), 1, p = alpha))
+      cur.D[accept, ] <- d.M[[j]][accept, ]
+      accept.track <- rbind(accept.track, accept)
+      
+    }
+    
+    y.hat.samps <- rbind(y.hat.samps, 
+                         data.frame(trial = 1:length(y), y.marginal = cur.D[, 1]))
+    
+  }
+  
+  sink(NULL)
+  
+  y.hat.samps
+  
+}
 
 predict_from_model <- function(y, x1, y.se, x1.se, xpred, band = FALSE, ...) {
   
